@@ -1,0 +1,34 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Downloads (PDFs from SIMIT)
+alpr_colombia/downloads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Model files (base pretrained)
+*.pt
+
+# Keep the fine-tuned model
+!alpr_colombia/models/plate_detector.pt
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Logs
+*.log
