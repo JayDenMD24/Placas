@@ -14,35 +14,19 @@ PATTERNS = {
 }
 
 CHAR_FIX = {
-    "0": "O", "O": "0",
-    "1": "I", "I": "1", "L": "1",
-    "2": "Z", "Z": "2",
-    "5": "S", "S": "5",
-    "8": "B", "B": "8",
-    "7": "T", "T": "7",
-    "6": "G", "G": "6",
-    "4": "A", "A": "4",
+    "0": "O", "1": "I", "2": "Z", "4": "A", "5": "S",
+    "6": "G", "7": "T", "8": "B", "9": "G",
+    "O": "0", "I": "1", "B": "8", "S": "5",
+    "G": "6", "Z": "2", "T": "7", "A": "4",
+    "D": "0", "L": "1", "E": "8", "Q": "0",
+    "U": "0", "V": "U", "H": "W",
 }
-
-REVERSE_FIX = {v: k for k, v in CHAR_FIX.items()}
 
 def _is_likely_city(text: str) -> bool:
     if len(text) < 4:
         return False
-    converted = []
-    for c in text:
-        if c.isdigit():
-            letra = REVERSE_FIX.get(c)
-            if letra and letra.isalpha():
-                converted.append(letra)
-            else:
-                converted.append(c)
-        else:
-            converted.append(c)
-    result = "".join(converted)
-    if result.isalpha() and len(result) >= 4:
-        return True
-    return False
+    letters = sum(1 for c in text if c.isalpha())
+    return letters >= 4 and letters == len(text)
 
 
 def _fix_plate(text: str) -> str | None:
@@ -65,7 +49,7 @@ def _fix_plate(text: str) -> str | None:
     }
 
     for cand in candidates:
-        for tipo, pattern in PATTERNS.items():
+        for pattern in PATTERNS.values():
             if pattern.match(cand) and not _is_likely_city(cand):
                 return cand
 
@@ -73,25 +57,20 @@ def _fix_plate(text: str) -> str | None:
         if len(cand) != 6:
             continue
         for tipo, pattern in PATTERNS.items():
-            letter_positions, digit_positions = letter_positions_by_type[tipo]
-            parts = list(cand)
+            letter_pos, digit_pos = letter_positions_by_type[tipo]
+            fixed = list(cand)
             changed = False
-            for i in range(6):
-                c = parts[i]
-                if i in letter_positions and c.isdigit():
-                    swap = CHAR_FIX.get(c)
-                    if swap and swap.isalpha():
-                        parts[i] = swap
-                        changed = True
-                elif i in digit_positions and c.isalpha():
-                    swap = CHAR_FIX.get(c)
-                    if swap and swap.isdigit():
-                        parts[i] = swap
-                        changed = True
+            for i, c in enumerate(cand):
+                if i in letter_pos and c.isdigit():
+                    fixed[i] = CHAR_FIX.get(c, c)
+                    changed = True
+                elif i in digit_pos and c.isalpha():
+                    fixed[i] = CHAR_FIX.get(c, c)
+                    changed = True
             if changed:
-                fixed = "".join(parts)
-                if pattern.match(fixed) and not _is_likely_city(fixed):
-                    return fixed
+                result = "".join(fixed)
+                if pattern.match(result) and not _is_likely_city(result):
+                    return result
 
     return None
 

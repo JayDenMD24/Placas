@@ -4,27 +4,28 @@ import cv2
 import threading
 import re
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from detector import PlateDetector
 from ocr import PlateReader
 from simit_scraper import SIMITScraper
 
 MODEL_PATH   = "models/plate_detector.pt"
 CAMERA_INDEX = 1
-FRAME_SKIP   = 3
-CONFIDENCE   = 0.25
+FRAME_SKIP   = 5
+CONFIDENCE   = 0.35
 CLEAR_AFTER  = 60
-IMGSZ        = 320
-STABLE_COUNT = 10
-MAX_CONSULTAS = 2
+IMGSZ        = 256
+STABLE_COUNT = 8
+MAX_CONSULTAS = 1
 MAX_ENTRIES  = 30
-GC_INTERVAL  = 30
+GC_INTERVAL  = 60
 
 PLATE_RE = re.compile(r"[A-Z]{3}\d{3}")
 
 CLASIFICACION = {
-    "normal":    {"color": (0, 200, 80),  "label": "NORMAL"},
-    "atencion":  {"color": (0, 200, 255), "label": "PRECAUCION"},
-    "peligroso": {"color": (0, 0, 255),   "label": "PELIGROSO"},
+    "normal":    {"color": (0, 200, 80),  "label": "SIN REGISTROS"},
+    "atencion":  {"color": (0, 200, 255), "label": "CON REGISTROS"},
+    "peligroso": {"color": (0, 0, 255),   "label": "REG. MULTIPLES"},
 }
 
 WINDOW_W = 1400
@@ -49,7 +50,8 @@ class ALPRSystem:
         self._ocr_text = ""
         self._ocr_working = False
         self._ocr_box_results = []
-        self._sem = threading.Semaphore(MAX_CONSULTAS)
+        self._simit_executor = ThreadPoolExecutor(max_workers=MAX_CONSULTAS, thread_name_prefix="simit")
+        self._ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
         self._click = None
         self._pdf_btns = []
         self._frame_count = 0
@@ -80,6 +82,10 @@ class ALPRSystem:
         entry["status"] = "consultando"
         try:
             result = self.simit.consult(plate)
+            if "error" in result:
+                entry["status"] = "error"
+                print(f"[SIMIT] Error {plate}: {result['error']}")
+                return
             nivel = self.simit.classify(result)
             entry["result"] = result
             entry["nivel"] = nivel
@@ -87,17 +93,15 @@ class ALPRSystem:
             c = result.get("total_comparendos", 0)
             m = result.get("total_multas", 0)
             a = result.get("total_acuerdos", 0)
-            print(f"[SIMIT] {plate}: C={c} M={m} A={a} ${result.get('total_pendiente',0):,} — {nivel}")
+            print(f"[SIMIT] {plate}: C={c} M={m} A={a} ${result.get('total_pendiente',0):,} -- {nivel}")
         except Exception as e:
             entry["status"] = "error"
             print(f"[SIMIT] Error {plate}: {e}")
-        finally:
-            self._sem.release()
 
     def _download_pdf(self, plate, entry):
         entry["pdf_status"] = "descargando..."
         try:
-            path = self.simit.download_pdf(plate)
+            path = self.simit.download_pdf(plate, result=entry.get("result"))
             entry["pdf_path"] = path
             entry["pdf_status"] = "PDF listo" if path else "Error"
         except Exception:
@@ -128,8 +132,7 @@ class ALPRSystem:
                 boxes, crops = self.detector.detect(frame, imgsz=IMGSZ)
                 self._boxes = boxes or []
                 if self._boxes and crops and not self._ocr_working:
-                    t = threading.Thread(target=self._ocr_all_crops, args=(crops,), daemon=True)
-                    t.start()
+                    self._ocr_executor.submit(self._ocr_all_crops, crops)
 
                 plate_num = self._get_plate_number(self._ocr_text or "")
                 self._last_plate = plate_num or ""
@@ -150,14 +153,9 @@ class ALPRSystem:
                     e["stability"] += 1
 
                     if e["stability"] >= STABLE_COUNT and e["status"] == "detectando":
-                        if self._sem.acquire(blocking=False):
-                            e["status"] = "consultando"
-                            t = threading.Thread(target=self._query_simit, args=(plate_num, e), daemon=True)
-                            t.start()
-                        else:
-                            e["status"] = "en_cola"
+                        e["status"] = "consultando"
+                        self._simit_executor.submit(self._query_simit, plate_num, e)
 
-            # Procesar clicks en botones PDF
             if self._click:
                 cx, cy = self._click
                 self._click = None
@@ -170,14 +168,6 @@ class ALPRSystem:
                             t.start()
                         break
 
-            # Reintentar placas en cola cuando haya slot libre
-            for plate, e in self.entries.items():
-                if e["status"] == "en_cola" and self._sem.acquire(blocking=False):
-                    e["status"] = "consultando"
-                    t = threading.Thread(target=self._query_simit, args=(plate, e), daemon=True)
-                    t.start()
-
-            # Limpiar placas que nunca se estabilizaron
             stale = []
             for plate, e in self.entries.items():
                 if e["stability"] < STABLE_COUNT and (self._frame_count - e["last_seen"]) > CLEAR_AFTER:
@@ -185,28 +175,34 @@ class ALPRSystem:
             for plate in stale:
                 del self.entries[plate]
 
-            # Limitar cantidad maxima de entries
             if len(self.entries) > MAX_ENTRIES:
                 sorted_entries = sorted(self.entries.items(), key=lambda x: x[1]["last_seen"])
                 for plate, _ in sorted_entries[:len(self.entries) - MAX_ENTRIES]:
                     del self.entries[plate]
 
-            # GC periodico
             if self._frame_count % GC_INTERVAL == 0:
                 gc.collect()
 
-            # Dibujar overlay en camera
             ocr_box_len = len(self._ocr_box_results)
             for i, (x1, y1, x2, y2, conf) in enumerate(self._boxes):
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 80), 2)
-                plate_txt = self._ocr_box_results[i] if i < ocr_box_len and self._ocr_box_results[i] else (self._last_plate or '---')
+                if i < ocr_box_len and self._ocr_box_results[i]:
+                    plate_txt = self._ocr_box_results[i]
+                elif self._ocr_working:
+                    plate_txt = "---"
+                else:
+                    plate_txt = "?"
                 label = f"{plate_txt}  {conf:.0%}"
                 cv2.rectangle(frame, (x1, y1 - 28), (x1 + len(label) * 11, y1), (0, 200, 80), -1)
                 cv2.putText(frame, label, (x1 + 4, y1 - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
 
-            # Panel completo (camera + lista)
-            panel = np.full((WINDOW_H, WINDOW_W, 3), (15, 15, 15), dtype=np.uint8)
+            try:
+                panel = np.full((WINDOW_H, WINDOW_W, 3), (15, 15, 15), dtype=np.uint8)
+            except MemoryError:
+                gc.collect()
+                continue
+
             panel[:, :CAM_W] = cv2.resize(frame, (CAM_W, WINDOW_H))
 
             self._pdf_btns = []
@@ -256,9 +252,6 @@ class ALPRSystem:
                 elif e["status"] == "consultando":
                     cv2.putText(panel, "Consultando SIMIT...", (LIST_X + 20, by + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                 (200, 200, 0), 1)
-                elif e["status"] == "en_cola":
-                    cv2.putText(panel, "En espera (3 consultas max)...", (LIST_X + 20, by + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (150, 150, 150), 1)
                 elif e["status"] == "error":
                     cv2.putText(panel, "Error en consulta", (LIST_X + 20, by + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                 (0, 0, 200), 1)
@@ -278,6 +271,8 @@ class ALPRSystem:
 
         cap.release()
         cv2.destroyAllWindows()
+        self._simit_executor.shutdown(wait=False)
+        self._ocr_executor.shutdown(wait=False)
         self.simit.close()
 
 

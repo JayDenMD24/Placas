@@ -9,7 +9,10 @@ __pycache__/
 *.pyd
 
 # Downloads (PDFs from SIMIT)
-alpr_colombia/downloads/
+downloads/
+
+# Drive cache (checkpoint sync)
+drive_cache/
 
 # IDE
 .vscode/
@@ -25,10 +28,15 @@ Thumbs.db
 *.pt
 
 # Keep the fine-tuned model
-!alpr_colombia/models/plate_detector.pt
+!models/plate_detector.pt
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
 
 # Logs
 *.log
+
+# Sample / test images
+ejemplo.jpeg
+fuente*.png
+fuente*.jpg
