@@ -36,6 +36,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Runtime batch captures
+captures/
+
 # Sample / test images
 ejemplo.jpeg
 fuente*.png
