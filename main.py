@@ -194,7 +194,11 @@ class ALPRSystem:
         try:
             path = self.simit.download_pdf(plate, result=entry.get("result"))
             entry["pdf_path"] = path
-            entry["pdf_status"] = "PDF listo" if path else "Error"
+            if path:
+                entry["pdf_status"] = "PDF listo"
+                os.startfile(path)
+            else:
+                entry["pdf_status"] = "Error"
         except Exception:
             entry["pdf_status"] = "Error"
 

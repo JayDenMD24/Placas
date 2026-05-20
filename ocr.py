@@ -114,8 +114,11 @@ class PlateReader:
             return ""
 
         img_h, img_w = img.shape[:2]
-        if img_w < 300:
-            scale = 300 / img_w
+        if img_w > 200:
+            scale = 200 / img_w
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        elif img_w < 100:
+            scale = 100 / img_w
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
