@@ -14,7 +14,7 @@ from simit_scraper import SIMITScraper
 MODEL_PATH    = "models/plate_detector.pt"
 CAMERA_INDEX  = 2
 FRAME_SKIP    = 1
-CONFIDENCE    = 0.35
+CONFIDENCE    = 0.70
 IMGSZ         = 256
 MAX_CONSULTAS = 2
 GC_INTERVAL   = 60
